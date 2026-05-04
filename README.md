@@ -14,9 +14,9 @@ Key Features
 
     Fedora Optimized: Primary development and testing performed on Fedora Linux to ensure stability in high-compute environments.
 
-Quick Start
-1. Installation
-
+## Quick Start
+### 1. Installation
+```bash
 Clone the repository and install the dependencies in a virtual environment:
 Bash
 
@@ -25,9 +25,10 @@ cd Spectral-Env-Core-v1.0
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
 
-2. Basic Usage
-Python
+### 2. Basic Usage
+```Python
 
 import gymnasium as gym
 import spectral_env_core
@@ -41,8 +42,9 @@ for _ in range(1000):
     
     if terminated or truncated:
         obs, info = env.reset()
+```
 
-License & Usage
+## License & Usage
 
 This software is provided under a Source-Available Commercial License.
 
@@ -53,8 +55,6 @@ This software is provided under a Source-Available Commercial License.
     Liability: Provided "AS IS" without warranty. See LICENSE.txt for full legal terms.
 
 Research & Support
-
-    Technical Reports: Available on the Spectral Forge Research Vault.
 
     Video Tutorials: Technical walkthroughs available on the Spectral Forge YouTube Channel.
 
