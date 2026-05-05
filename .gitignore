@@ -1,0 +1,26 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# OS Specific (Fedora/Linux)
+.DS_Store
+.directory
+
+# Data & Models
+data/
+*.csv
+*.parquet
+*.h5
+*.pth
+*.onnx
+
+# Secrets
+.env
+keys.json
+credentials.py

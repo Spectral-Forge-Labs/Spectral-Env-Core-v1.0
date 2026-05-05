@@ -1,0 +1,32 @@
+SPECTRAL FORGE LABS – END USER LICENSE AGREEMENT (EULA)
+
+Product: Spectral-Env-Core / Spectral Forge Research Assets
+Author: Spectral Forge Labs
+1. GRANT OF LICENSE
+
+This is a proprietary, source-available license. By purchasing access to this software via Polar.sh, Spectral Forge Labs grants you a non-exclusive, non-transferable right to:
+
+    Download, view, and modify the source code for personal, educational, or internal research purposes only.
+
+    Incorporate the software into your own private machine learning pipelines and research workflows.
+
+2. RESTRICTIONS
+
+You are STRICTLY PROHIBITED from:
+
+    Redistributing, sub-licensing, or sharing the source code with any third party.
+
+    Using the software, in whole or in part, as the basis for a competing software product, trading signal service, or commercial API.
+
+    Publicly hosting the source code in any repository (e.g., public GitHub forks).
+
+3. NO WARRANTY (THE "AS-IS" CLAUSE)
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+4. FINANCIAL RISK DISCLOSURE
+
+TRADING AND INVESTING INVOLVES SUBSTANTIAL RISK OF LOSS.
+This software is a technical simulation tool intended for data science research and educational purposes only. Spectral Forge Labs is not a registered investment advisor. The use of this software does not guarantee any specific financial outcome. Any trades or investment decisions made based on models trained within this environment are the sole responsibility of the user.
+5. TERMINATION
+
+This license is effective until terminated. Your rights under this license will terminate automatically without notice if you fail to comply with any of its terms.
