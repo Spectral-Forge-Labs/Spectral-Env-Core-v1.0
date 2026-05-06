@@ -31,7 +31,7 @@ pip install -r requirements.txt
 ```Python
 
 import gymnasium as gym
-import spectral_env_core
+from spectral_env_core import SpectralTradingEnv
 
 env = gym.make('SpectralEnv-v1')
 obs, info = env.reset()
