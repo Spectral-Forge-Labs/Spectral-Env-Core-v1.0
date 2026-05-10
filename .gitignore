@@ -8,6 +8,16 @@ venv/
 .venv/
 env/
 
+# Python bytecode
+**/__pycache__/
+*.pyc
+
+# Jupyter Notebook checkpoints
+**/.ipynb_checkpoints/
+
+# Local logs
+logs.txt
+
 # OS Specific (Fedora/Linux)
 .DS_Store
 .directory

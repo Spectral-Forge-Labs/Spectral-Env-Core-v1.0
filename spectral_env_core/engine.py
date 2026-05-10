@@ -18,9 +18,9 @@ class SpectralTradingEnv(gym.Env):
                  num_steps=100,
                  time_total=1.0,
                  initial_price=100.0,
-                 volatility=0.1,  # Sigma for the Brownian motion
+                 volatility=0.1,  
                  drift=0.05,
-                 transaction_cost_pct=0.01, # 0.1% transaction cost
+                 transaction_cost_pct=0.01, 
                  starting_cash=1000.0,
                  max_shares=10,
                  lookback_window=30,
@@ -34,6 +34,7 @@ class SpectralTradingEnv(gym.Env):
         self.num_steps = num_steps
         self.time_total = time_total
         self.initial_price = initial_price
+        self.peak_price = 0.0
         self.volatility = volatility
         self.drift = drift
         self.transaction_cost_pct = transaction_cost_pct
@@ -41,44 +42,44 @@ class SpectralTradingEnv(gym.Env):
         self.max_shares = max_shares
         self.render_mode = render_mode
         self.lookback_window = lookback_window
-        self.peak_price = 0.0
         self.phi = phi 
-        self.df = df # Degrees of freedom for Kurtosis
+        self.df = df 
         self.base_volatility = volatility
-
-        self.action_history = []
 
         # Calculate dt for Brownian motion
         self.dt = self.time_total / self.num_steps
 
         # --- Action Space ---
-        # 0: Hold
-        # 1: Buy 1 share
-        # 2: Sell 1 share
+        # 0: Hold, 1: Buy, 2: Sell
         self.action_space = spaces.Discrete(3)
 
         # --- Observation Space ---
-       # We define the number of features: 3 (metadata) + 30 (history)
-        obs_size = 3 + self.lookback_window
+        # plus the price history window
+        # Ensure this matches your _get_obs() return length exactly
+        self.num_meta_features = 3
         
-        # Update low and high bounds to match the new size
-        # Using -np.inf and np.inf for the price history window
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf, 
-            shape=(obs_size,), 
+            shape=(self.num_meta_features + self.lookback_window,), 
             dtype=np.float32
         )
 
-        # --- Internal State (will be initialized in reset) ---
+        # --- Internal State Initialization ---
         self.current_step = 0
-        self.current_price = 0.0
-        self.cash = 0.0
+        self.current_price = initial_price
+        self.cash = starting_cash
         self.shares = 0
+        
+        # New State for Sortino Reward
+        self.returns_window = [] 
+        
+        # Histories for rendering/tracking
         self.price_history = []
         self.cash_history = []
         self.shares_history = []
-        self.portfolio_value_history = [] # For rendering/tracking
+        self.portfolio_value_history = []
+        self.action_history = []
 
         # For rendering
         self.fig = None
@@ -122,91 +123,67 @@ class SpectralTradingEnv(gym.Env):
         return path
 
     def _get_obs(self):
-        # 1. Handle Price History and Padding
-        prices = list(self.price_history)
-        if len(prices) < self.lookback_window:
-            # Use initial_price for padding to maintain scale consistency
-            padding = [self.initial_price] * (self.lookback_window - len(prices))
-            prices = padding + prices
+        # 1. Price Window (Normalized)
+        # Ensure lookback is consistent. If history < window, pad with starting price.
+        window_size = self.lookback_window
+        prices = list(self.price_history)[-window_size:]
+        if len(prices) < window_size:
+            pad_value = self.brownian_path[0]
+            prices = [pad_value] * (window_size - len(prices)) + prices
         
-        # Get the most recent window
-        recent_prices = np.array(prices[-self.lookback_window:], dtype=np.float32)
-        
-        # 2. Normalize Prices (Relative to Current Price)
-        # This turns [100, 101, 99] into [0.0, 0.01, -0.01] roughly
-        # It allows the agent to see "Percent change" rather than "Raw Price"
-        norm_prices = (recent_prices / self.current_price) - 1.0 
-        
-        # 3. Normalize Account Metadata
-        # Scale everything relative to starting capital or max limits
+        # Normalize prices as % change from the current price
+        norm_prices = np.array(prices) / self.current_price - 1.0
+
+        # 2. Meta Features (Scaled to roughly -1.0 to 1.0)
+        # Scaling cash/portfolio by the starting_cash helps the network stay stable
         norm_cash = self.cash / self.starting_cash
         norm_shares = self.shares / self.max_shares
-        
-        current_portfolio_value = self.cash + (self.shares * self.current_price)
-        norm_portfolio = current_portfolio_value / self.starting_cash
-        
-        # 4. Package Metadata
-        metadata = np.array([
-            norm_cash,
-            norm_shares,
+        norm_portfolio = (self.cash + (self.shares * self.current_price)) / self.starting_cash
+
+        # 3. Concatenate
+        meta_features = np.array([
+            norm_cash, 
+            norm_shares, 
             norm_portfolio
         ], dtype=np.float32)
-        
-        # 5. Concatenate: [Cash, Shares, Value, Price_t-29, ... Price_t-0]
-        return np.concatenate([metadata, norm_prices])
 
-    def _get_info(self):
-        """Returns auxiliary information for debugging/logging."""
-        return {
-            "current_price": self.current_price,
-            "cash": self.cash,
-            "shares": self.shares,
-            "portfolio_value": self.cash + self.shares * self.current_price
-        }
+        return np.concatenate([norm_prices, meta_features]).astype(np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
+        # 1. Basic State Initialization
         self.current_step = 0
         self.cash = self.starting_cash 
-        self.shares = 0 
+        self.shares = 0
         self.peak_price = self.initial_price
-        self.brownian_path = self._generate_brownian_path()
-        self.current_price = self.brownian_path[self.current_step]
-
-        # Randomize the regime: Momentum (>0) or Reversion (<0)
-        # 50% of the time, give it a trending market to practice 'riding the wave'
-        # 50% of the time, give it a mean-reverting market to practice 'timing the exit'
+        
+        # 2. Regime Randomization (Momentum vs Mean Reversion)
         if np.random.rand() > 0.5:
             self.phi = np.random.uniform(0.1, 0.5)
         else:
             self.phi = np.random.uniform(-0.5, -0.1)
         
-        # Optional: Randomize volatility too for extra generalization
-        #self.volatility = np.random.uniform(0.02, 0.15) 
-
-        self.action_history = [] # Clear history for the new episode
-        self.price_history = [self.initial_price]
-
-        self.current_step = 0
-        self.peak_price = self.initial_price
-        
-        # This now uses the randomized phi and df
+        # 3. Path Generation & Initial Price
         self.brownian_path = self._generate_brownian_path()
         self.current_price = self.brownian_path[self.current_step]
-
-        # 1. Pad PRICE history for the observation window
-        self.price_history = [self.current_price] * self.lookback_window
         
-        # 2. Pad PORTFOLIO history to match the length of price_history
-        # This prevents the Matplotlib dimension mismatch error
-        initial_value = self.cash + (self.shares * self.current_price)
-        self.portfolio_value_history = [initial_value] * self.lookback_window
+        # 4. Risk & Reward Memory (Sanitization)
+        self.peak_portfolio_value = self.starting_cash
+        self.returns_window = []
 
-        # 3. Keep these as single-entry or pad them if your render uses them
-        self.cash_history = [self.cash] * self.lookback_window
-        self.shares_history = [self.shares] * self.lookback_window
+        # 5. History for Rendering (Start fresh to avoid flatlines)
+        # We initialize as single-item lists so the plot grows from Step 0
+        self.price_history = [self.current_price]
+        self.shares_history = [self.shares]
+        self.cash_history = [self.cash]
+        
+        initial_val = self.cash + (self.shares * self.current_price)
+        self.portfolio_value_history = [initial_val]
+        self.action_history = [] 
 
+        # 6. Observation and Initial Frame
+        # Note: Ensure _get_obs() handles padding internally if history is < lookback
         observation = self._get_obs()
         info = self._get_info()
 
@@ -215,25 +192,25 @@ class SpectralTradingEnv(gym.Env):
 
         return observation, info
 
+
     def step(self, action):
         assert self.action_space.contains(action), f"Invalid action {action}"
         self.action_history.append(action)
 
-        # 1. Capture state BEFORE price move and action
+        # 1. Capture state BEFORE action and price move
         prev_price = self.current_price
-        prev_portfolio_value = self.cash + self.shares * prev_price
+        prev_portfolio_value = self.cash + (self.shares * self.current_price)
 
-        # 2. Execute Action & Calculate Immediate Transaction Friction
-        # We penalize the act of trading slightly to prevent "spamming" buy/sell
+        # 2. Execute Action & Friction Logic
         friction_penalty = 0.0
         if action == 1:  # Buy
-            if self.shares < self.max_shares:
-                cost = self.current_price * (1 + self.transaction_cost_pct)
-                self.cash -= cost
+            cost_to_buy = self.current_price * (1 + self.transaction_cost_pct)
+            if self.cash >= cost_to_buy and self.shares < self.max_shares:
+                self.cash -= cost_to_buy
                 self.shares += 1
                 friction_penalty = self.current_price * self.transaction_cost_pct
             else:
-                friction_penalty = 0.05  # Higher penalty for trying to exceed limits
+                friction_penalty = 0.05  # invalid buy
                 
         elif action == 2:  # Sell
             if self.shares > 0:
@@ -242,64 +219,68 @@ class SpectralTradingEnv(gym.Env):
                 self.shares -= 1
                 friction_penalty = self.current_price * self.transaction_cost_pct
             else:
-                friction_penalty = 0.05
+                friction_penalty = 0.05  # invalid sell
 
         # 3. Advance Time and Update Price
         self.current_step += 1
         if self.current_step < len(self.brownian_path):
             self.current_price = self.brownian_path[self.current_step]
-        
-        # --- NEW: Trailing Stop Loss Logic ---
-        # 1. Update the High-Water Mark if we are in a long position
+
+        # 4. Trailing Stop Logic (from old version)
         if self.shares > 0:
             self.peak_price = max(self.peak_price, self.current_price)
         else:
-            # Reset peak price when flat or short to prepare for next trade
-            self.peak_price = self.current_price
+            self.peak_price = self.current_price  # reset when flat
 
-        # 2. Calculate the "Drawdown" from the peak
         trailing_stop_penalty = 0.0
         if self.shares > 0:
             drop_from_peak = (self.peak_price - self.current_price) / self.peak_price
-            
-            # If price drops more than 2% from its peak while we hold shares
             if drop_from_peak > 0.02:
-                # Penalty scales with how far past the stop we are
                 trailing_stop_penalty = (drop_from_peak ** 2) * 100.0
 
-        # 4. CALCULATE NEW REWARD LOGIC
-        # A. Price Movement Reward: Captures the profit/loss of the current position
+        # 5. OLD Reward Logic
+        # A. Position P&L: did the price move work in your favour?
         price_delta = self.current_price - prev_price
-        # This rewards positive delta if long (shares > 0) and negative delta if short (shares < 0)
         movement_reward = self.shares * price_delta
 
-        # B. Time Decay / Opportunity Cost (The "Swing Trader" Incentive)
-        # Penalize holding a position that isn't moving to encourage finding better entry points
-        # Updated B. Time Decay / Opportunity Cost
+        # B. Idle penalty: cost for sitting out or holding without action
         idle_penalty = 0.0
         if self.shares == 0:
-            idle_penalty = 0.005 # Small penalty for not being in the market
+            idle_penalty = 0.005
         elif action == 0 and self.shares != 0:
             idle_penalty = 0.001 * abs(self.shares)
 
-        # C. Final Reward Composition
-        # We subtract friction to ensure the trade was worth the cost
-        reward = movement_reward - friction_penalty - idle_penalty - trailing_stop_penalty
+        # C. Compose final reward
+        final_reward = (movement_reward - friction_penalty - idle_penalty - trailing_stop_penalty) / self.initial_price
+        self.last_friction_leak = friction_penalty
 
-        # 5. Check Termination
-        terminated = self.current_step >= len(self.brownian_path) - 1
+        # 6. Track returns for downside risk (keep your fix)
+        current_portfolio_value = self.cash + (self.shares * self.current_price)
+        step_return = (current_portfolio_value - prev_portfolio_value) / max(prev_portfolio_value, 1e-9)
+        self.returns_window.append(step_return)
+        if len(self.returns_window) > 50:
+            self.returns_window.pop(0)
+
+        # 7. Termination
+        terminated = self.current_step >= self.num_steps
         truncated = False
 
-        # 6. Final State Calculations
-        current_portfolio_value = self.cash + self.shares * self.current_price
-        
-        # Update histories and return
+        # 8. History Updates
         self.price_history.append(self.current_price)
         self.cash_history.append(self.cash)
         self.shares_history.append(self.shares)
         self.portfolio_value_history.append(current_portfolio_value)
 
-        return self._get_obs(), reward, terminated, truncated, self._get_info()
+        return self._get_obs(), final_reward, terminated, truncated, self._get_info()
+
+    def _get_info(self):
+        return {
+            "price": self.current_price,           # Used for your print statement
+            "shares": self.shares,                 # Used for your print statement
+            "friction_leak": getattr(self, 'last_friction_leak', 0.0),
+            "cash": self.cash,
+            "step": self.current_step
+        }
 
     def render(self):
         """Renders the environment."""
@@ -307,6 +288,9 @@ class SpectralTradingEnv(gym.Env):
             self._render_frame()
 
     def _render_frame(self):
+        if len(self.price_history) < 2:
+            return  # Wait until we have at least two points to draw a line
+
         if self.fig is None:
             plt.ion() 
             # 3 Panes: Price/Actions, Returns %, and Inventory
@@ -322,23 +306,25 @@ class SpectralTradingEnv(gym.Env):
         time_steps = np.arange(len(self.price_history))
 
         # --- Pane 1: Price Action & Agent Decisions ---
-        self.ax[0].plot(time_steps, self.price_history, label='Price', color='blue', alpha=0.6)
+        self.ax[0].plot(self.price_history, color='blue', lw=1.5)
         
         # Identify Buy/Sell actions for markers
         # Assuming Action 1 = Buy, Action 2 = Sell (adjust based on your actual action space)
-        buys = [i for i, a in enumerate(self.action_history) if a == 1]
-        sells = [i for i, a in enumerate(self.action_history) if a == 2]
+        buys = [i +1 for i, a in enumerate(self.action_history) if a == 1]
+        sells = [i +1 for i, a in enumerate(self.action_history) if a == 2]
         
         if buys:
             self.ax[0].scatter(buys, [self.price_history[i] for i in buys], 
-                               marker='^', color='green', label='Buy', zorder=5)
+                               marker='^', color='green', label='Buy', zorder=5, s=100)
         if sells:
             self.ax[0].scatter(sells, [self.price_history[i] for i in sells], 
-                               marker='v', color='red', label='Sell', zorder=5)
+                               marker='v', color='red', label='Sell', zorder=5, s=100)
             
         self.ax[0].set_title(f"Episode Analysis | Phi: {self.phi:.2f} | Vol: {self.volatility:.2f}")
         self.ax[0].set_ylabel("Price ($)")
-        self.ax[0].legend(loc='upper left')
+        handles, labels = self.ax[0].get_legend_handles_labels()
+        if handles:
+            self.ax[0].legend(loc='upper left')
 
         # --- Pane 2: Portfolio Performance (Normalized %) ---
         if len(self.portfolio_value_history) > 0:
@@ -356,12 +342,18 @@ class SpectralTradingEnv(gym.Env):
         self.ax[1].legend(loc='upper left')
 
         # --- Pane 3: Inventory Level ---
-        self.ax[2].fill_between(time_steps, self.shares_history, color='purple', alpha=0.3, label='Shares')
+        # Use .step() instead of .fill_between() for discrete shares—it looks much more professional
+        self.ax[2].step(time_steps, self.shares_history, where='post', color='purple', label='Shares')
+        self.ax[2].fill_between(time_steps, self.shares_history, step='post', color='purple', alpha=0.2)
+        
         self.ax[2].set_ylabel("Shares Held")
         self.ax[2].set_xlabel("Time Step")
-        self.ax[2].set_ylim(0, max(self.shares_history) + 1 if self.shares_history else 11)
+        
+        # Set a fixed height based on max_shares so the plot doesn't jump around
+        self.ax[2].set_ylim(0, self.max_shares + 1) 
         self.ax[2].set_xlim(0, self.num_steps)
 
-        # Refresh canvas
-        self.fig.canvas.draw_idle()
+        # Replace draw_idle() with a forced draw
+        self.fig.canvas.draw() 
         self.fig.canvas.flush_events()
+        plt.pause(0.01) # This is non-negotiable for live updates
