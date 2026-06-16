@@ -291,11 +291,17 @@ class SpectralTradingEnv(gym.Env):
         if len(self.price_history) < 2:
             return  # Wait until we have at least two points to draw a line
 
+        n = self.num_assets
+        cmap = plt.cm.get_cmap('tab10', max(n, 1))
+        colors = [cmap(i) for i in range(n)]
+        labels = [f"Asset {i}" for i in range(n)]
+
+        n_panes = 4
         if self.fig is None:
             plt.ion() 
             # 3 Panes: Price/Actions, Returns %, and Inventory
-            self.fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
-            self.ax = [ax1, ax2, ax3]
+            self.fig, axes = plt.subplots(n_panes, 1, figsize=(12, 13), sharex=True)
+            self.ax = list(axes)
             plt.tight_layout(pad=3.0)
 
         # 1. Clear previous frames
@@ -356,4 +362,12 @@ class SpectralTradingEnv(gym.Env):
         # Replace draw_idle() with a forced draw
         self.fig.canvas.draw() 
         self.fig.canvas.flush_events()
+        
         plt.pause(0.01) # This is non-negotiable for live updates
+
+    def close(self):
+        """"Clean up matplotlib resources. Required by the Gymnasium interface."""
+        if self.fig is not None:
+            plt.close(self.fig)
+            self.fig = None
+            self.ax  = None

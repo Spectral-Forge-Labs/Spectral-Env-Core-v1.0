@@ -9,9 +9,11 @@ description = "Financial pricing data feature store and RL environment"
 dependencies = [
     "gymnasium",
     "numpy",
+    "scipy",
     "stable-baselines3",
     "matplotlib"
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["spectral_env_core*"]

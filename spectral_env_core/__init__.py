@@ -1,3 +1,13 @@
-from .engine import SpectralTradingEnv
+from .engine2 import SpectralTradingEnv
+from .wrappers import SpectralRenderWrapper
+from .extractors import SpectralExtractor
+from .callbacks import DiagnosticsCallback, EntropyCoefficientCallback
+from .est_env_params import estimate_single as estimate_params
+from .est_env_params import estimate_multi as estimate_params_multi
 
-# This allows: from spectral_env_core import YourEnvClass
+from gymnasium.envs.registration import register
+
+register(
+    id='SpectralEnv-v1',
+    entry_point='spectral_env_core.engine2:SpectralTradingEnv',
+)

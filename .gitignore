@@ -15,8 +15,14 @@ env/
 # Jupyter Notebook checkpoints
 **/.ipynb_checkpoints/
 
-# Local logs
+# Local logs & training artifacts
+logs/
 logs.txt
+models/
+*.npz
+*.pkl
+eval_logs/
+best_model/
 
 # OS Specific (Fedora/Linux)
 .DS_Store
@@ -34,3 +40,10 @@ data/
 .env
 keys.json
 credentials.py
+
+# Kiro
+.kiro/
+
+# WIP — not ready for repo yet
+alpaca_rl_trader.py
+lite/
