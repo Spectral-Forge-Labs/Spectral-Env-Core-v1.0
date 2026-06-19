@@ -150,6 +150,14 @@ class SpectralTradingEnv(gym.Env):
         #   - max_shares is interpreted as max position value in USD per asset
         #   - trade sizing maps action → notional / price (no rounding)
         fractional: bool = False,
+        # Technical indicator plugins — list of Indicator instances that
+        # automatically expand the observation space.
+        indicators: list = None,
+        # Slippage (market impact) — models the implicit cost of consuming
+        # order book liquidity. Larger orders incur proportionally more impact.
+        # Set slippage_bps=0 to disable (default: no slippage).
+        slippage_bps: float = 0.0,
+        liquidity_shares: float = 10_000.0,
         # AR(1) behaviour
         randomize_phi: bool = True,
         render_mode=None,
@@ -212,6 +220,10 @@ class SpectralTradingEnv(gym.Env):
         self.render_mode          = render_mode
         self.dt                   = time_total / num_steps
 
+        # Slippage parameters
+        self.slippage_bps      = float(slippage_bps)
+        self.liquidity_shares  = float(liquidity_shares)
+
         # Absolute price floors per asset (computed once)
         self._price_floors = self.initial_price_arr * price_floor_pct
 
@@ -265,7 +277,17 @@ class SpectralTradingEnv(gym.Env):
         # --- Observation space: flat float32 vector ---
         self.num_price_features = num_assets * lookback_window
         self.num_meta_features  = num_assets + 4  # shares(N) + cash + portfolio + unrealised_exit_cost + time_remaining
-        obs_dim = self.num_price_features + self.num_meta_features
+
+        # --- Technical indicator plugins ---
+        self.indicators = indicators or []
+        self.num_indicator_features = 0
+        for ind in self.indicators:
+            if ind.per_asset:
+                self.num_indicator_features += ind.n_features * num_assets
+            else:
+                self.num_indicator_features += ind.n_features
+
+        obs_dim = self.num_price_features + self.num_meta_features + self.num_indicator_features
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -505,7 +527,18 @@ class SpectralTradingEnv(gym.Env):
             [norm_cash, *norm_shares.tolist(), norm_portfolio, unrealised_exit_cost, time_remaining],
             dtype=np.float32
         )
-        return np.concatenate([*price_features, meta]).astype(np.float32)
+
+        # --- Indicator plugin values ---
+        indicator_values = []
+        for ind in self.indicators:
+            vals = ind.compute(self.brownian_path, self.current_step)
+            indicator_values.append(np.asarray(vals, dtype=np.float32))
+
+        parts = [*price_features, meta]
+        if indicator_values:
+            parts.extend(indicator_values)
+
+        return np.concatenate(parts).astype(np.float32)
 
     # -----------------------------------------------------------------------
     # Reset
@@ -604,11 +637,14 @@ class SpectralTradingEnv(gym.Env):
             price_i = self.current_price[i]
             cost_pct = self.transaction_cost_pct
 
+            # Slippage: price impact proportional to order size / liquidity
+            # impact = slippage_bps/10000 × |actual_qty| / liquidity_shares
+            # Buys pay more, sells receive less.
+
             if qty > 0:
-                # Buys: no transaction fee
-                max_affordable = self.cash / price_i  # fractional units affordable
+                # Buys: no explicit fee, but slippage applies
+                max_affordable = self.cash / price_i
                 if self.fractional:
-                    # Cap by max position value (max_shares_arr in USD)
                     current_value = self.shares[i] * price_i
                     room = max(0.0, (self.max_shares_arr[i] - current_value) / price_i)
                     actual_qty = min(float(qty), float(max_affordable), float(room))
@@ -617,19 +653,35 @@ class SpectralTradingEnv(gym.Env):
                     room = int(self.max_shares_arr[i]) - int(self.shares[i])
                     actual_qty = max(0, min(int(qty), max_affordable, room))
 
-                self.cash      -= actual_qty * price_i
+                # Apply slippage to buy price
+                if self.slippage_bps > 0 and actual_qty > 0:
+                    impact = (self.slippage_bps / 10_000) * (abs(actual_qty) / self.liquidity_shares)
+                    fill_price = price_i * (1.0 + impact)
+                else:
+                    fill_price = price_i
+
+                self.cash      -= actual_qty * fill_price
                 self.shares[i] += actual_qty
+                friction_penalty += actual_qty * (fill_price - price_i)  # slippage cost
 
             elif qty < 0:
-                # Sells: transaction fee applied to proceeds
+                # Sells: explicit fee + slippage
                 if self.fractional:
                     actual_qty = min(abs(float(qty)), float(self.shares[i]))
                 else:
                     actual_qty = max(0, min(int(-qty), int(self.shares[i])))
 
-                self.cash        += actual_qty * price_i * (1 - cost_pct)
+                # Apply slippage to sell price
+                if self.slippage_bps > 0 and actual_qty > 0:
+                    impact = (self.slippage_bps / 10_000) * (abs(actual_qty) / self.liquidity_shares)
+                    fill_price = price_i * (1.0 - impact)
+                else:
+                    fill_price = price_i
+
+                self.cash        += actual_qty * fill_price * (1 - cost_pct)
                 self.shares[i]   -= actual_qty
-                friction_penalty += actual_qty * price_i * cost_pct
+                friction_penalty += actual_qty * fill_price * cost_pct  # explicit fee
+                friction_penalty += actual_qty * (price_i - fill_price)  # slippage cost
 
         # 3. Advance time
         self.current_step += 1

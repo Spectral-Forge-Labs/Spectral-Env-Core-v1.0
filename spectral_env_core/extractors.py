@@ -74,7 +74,11 @@ class SpectralExtractor(BaseFeaturesExtractor):
         self.asset_embed_dim    = asset_embed_dim
 
         # Meta features: cash(1) + shares(N) + portfolio(1) + exit_cost(1) + time_remaining(1)
-        self.meta_dim       = 1 + num_assets + 1 + 1 + 1
+        base_meta_dim = 1 + num_assets + 1 + 1 + 1
+
+        # Any remaining features are from indicators
+        obs_total = observation_space.shape[0]
+        self.meta_dim = obs_total - self.price_features_dim  # includes base meta + indicators
         self.meta_embed_dim = meta_embed_dim
 
         # Output dim derived from architecture
@@ -93,7 +97,7 @@ class SpectralExtractor(BaseFeaturesExtractor):
             nn.ReLU(),
         )
 
-        # Metadata projection — aligns gradient scale with price embeddings
+        # Metadata + indicator projection — aligns gradient scale with price embeddings
         self.meta_net = nn.Sequential(
             nn.Linear(self.meta_dim, meta_embed_dim),
             nn.ReLU(),
