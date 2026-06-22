@@ -49,3 +49,4 @@ alpaca_rl_trader.py
 
 # Lite package (separate repo)
 lite/
+train.py
