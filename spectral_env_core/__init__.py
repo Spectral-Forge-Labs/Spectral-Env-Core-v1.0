@@ -7,6 +7,7 @@ from .backtest import backtest, backtest_historical, BacktestReport
 from .journal import TradeJournal
 from .est_env_params import estimate_single as estimate_params
 from .est_env_params import estimate_multi as estimate_params_multi
+from .macro import available_regimes, compute_episode_modifiers
 
 from gymnasium.envs.registration import register
 

@@ -160,12 +160,24 @@ class SpectralTradingEnv(gym.Env):
         liquidity_shares: float = 10_000.0,
         # AR(1) behaviour
         randomize_phi: bool = True,
+        # Macro regime conditioning — condition each episode on a Fed stress
+        # scenario. Options:
+        #   None           → standard GARCH/jump paths (default, unchanged)
+        #   "<regime_name>" → every episode conditioned on that regime
+        #   "random"       → sample a different regime each episode (domain
+        #                     randomization across all available regimes)
+        macro_regime=None,
+        macro_severity: float = 1.0,
         render_mode=None,
     ):
         super().__init__()
 
         self.num_assets = num_assets
         self.fractional = fractional
+
+        # Macro regime conditioning
+        self.macro_regime   = macro_regime
+        self.macro_severity = float(macro_severity)
 
         # --- Per-asset parameter arrays ---
         self.initial_price_arr = self._broadcast(initial_price, num_assets, 'initial_price', float)
@@ -302,6 +314,11 @@ class SpectralTradingEnv(gym.Env):
         self.phi_arr         = np.full(num_assets, phi, dtype=float)
         self.current_regime  = 0
         self.regime_sequence = np.zeros(num_steps, dtype=int)
+
+        # Macro modifiers — recomputed each reset() when a regime is active
+        self._macro_drift_mod = None
+        self._macro_vol_mod   = None
+        self._active_macro_regime = None  # which regime this episode used
 
         # Bounded history deques — O(1) append, bounded memory.
         # Full-episode histories are available via self.brownian_path and
@@ -451,6 +468,13 @@ class SpectralTradingEnv(gym.Env):
         # 7. Jump diffusion
         jump_t = self._generate_jumps()
 
+        # 7b. Macro regime conditioning — apply drift/vol modifiers if a
+        # regime is active for this episode. Additive drift, multiplicative vol.
+        if self._macro_drift_mod is not None:
+            drift_t = drift_t + self._macro_drift_mod[:, None]
+        if self._macro_vol_mod is not None:
+            vol_t = vol_t * self._macro_vol_mod[:, None]
+
         # 8. Log-returns (Itô correction applied to drift)
         log_returns = (
             (drift_t - 0.5 * vol_t ** 2) * self.dt
@@ -562,6 +586,32 @@ class SpectralTradingEnv(gym.Env):
             self.phi_arr = mags * signs
         else:
             self.phi_arr = np.full(self.num_assets, self.phi, dtype=float)
+
+        # Macro regime conditioning — compute per-episode drift/vol modifiers.
+        # Resolves "random" to a concrete regime each episode (domain
+        # randomization). When macro_regime is None, modifiers stay None and
+        # the path generation is bit-identical to the unconditioned engine.
+        if self.macro_regime is not None:
+            from spectral_env_core.macro import (
+                compute_episode_modifiers,
+                available_regimes,
+            )
+            if self.macro_regime == "random":
+                regimes = available_regimes()
+                chosen = regimes[int(self.np_random.integers(0, len(regimes)))]
+            else:
+                chosen = self.macro_regime
+            self._active_macro_regime = chosen
+            self._macro_drift_mod, self._macro_vol_mod = compute_episode_modifiers(
+                chosen,
+                self.num_steps,
+                self.np_random,
+                severity_scalar=self.macro_severity,
+            )
+        else:
+            self._macro_drift_mod = None
+            self._macro_vol_mod   = None
+            self._active_macro_regime = None
 
         # Generate full episode price paths
         self.brownian_path  = self._generate_brownian_path()
@@ -774,6 +824,7 @@ class SpectralTradingEnv(gym.Env):
             "regime":        self.current_regime,
             "friction_leak": getattr(self, 'last_friction_leak', 0.0),
             "fractional":    self.fractional,
+            "macro_regime":  self._active_macro_regime,
         }
 
     def render(self):
